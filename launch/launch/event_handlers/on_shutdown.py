@@ -52,6 +52,7 @@ class OnShutdown(BaseEventHandler):
         """Create an OnShutdown event handler."""
         super().__init__(
             matcher=lambda event: is_a_subclass(event, Shutdown),
+            event_types=(Shutdown,),
             **kwargs,
         )
         # TODO(wjwwood) check that it is not only callable, but also a callable that matches

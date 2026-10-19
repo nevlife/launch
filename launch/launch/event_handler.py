@@ -19,6 +19,7 @@ from typing import List
 from typing import Optional
 from typing import Text
 from typing import Tuple
+from typing import Type
 from typing import TYPE_CHECKING
 
 from .event import Event
@@ -38,7 +39,14 @@ class BaseEventHandler:
     `launch.substitutions.LocalSubstitution('event.name')`.
     """
 
-    def __init__(self, *, matcher: Callable[[Event], bool], handle_once: bool = False):
+    def __init__(
+        self,
+        *,
+        matcher: Callable[[Event], bool],
+        handle_once: bool = False,
+        event_types: Optional[Tuple[Type[Event], ...]] = None,
+        event_action: Optional[object] = None,
+    ):
         """
         Create a BaseEventHandler.
 
@@ -46,9 +54,15 @@ class BaseEventHandler:
             the event should be handled by this event handler, False otherwise.
         :param: handle_once is a flag that, if True, unregisters this EventHandler
             after being handled once.
+        :param: event_types, if given, promises that matcher returns False for
+            events that are not instances of one of these types.
+        :param: event_action, if given, promises that matcher returns False for
+            events whose `action` attribute is not this object.
         """
         self.__matcher = matcher
         self.__handle_once = handle_once
+        self.event_types = event_types
+        self.event_action = event_action
 
     @property
     def handle_once(self):
@@ -108,7 +122,8 @@ class EventHandler(BaseEventHandler):
         *,
         matcher: Callable[[Event], bool],
         entities: Optional[SomeEntitiesType] = None,
-        handle_once: bool = False
+        handle_once: bool = False,
+        event_types: Optional[Tuple[Type[Event], ...]] = None,
     ) -> None:
         """
         Create an EventHandler.
@@ -119,8 +134,9 @@ class EventHandler(BaseEventHandler):
             returned by handle() unconditionally if matcher returns True.
         :param: handle_once is a flag that, if True, unregisters this EventHandler
             after being handled once.
+        :param: event_types, see BaseEventHandler.
         """
-        super().__init__(matcher=matcher, handle_once=handle_once)
+        super().__init__(matcher=matcher, handle_once=handle_once, event_types=event_types)
 
         self.__entities = entities
 

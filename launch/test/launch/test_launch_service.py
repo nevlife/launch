@@ -14,6 +14,7 @@
 
 """Tests for the LaunchService class."""
 
+import asyncio
 import queue
 import threading
 
@@ -22,6 +23,8 @@ from launch import LaunchService
 from launch.events import ExecutionComplete
 
 import osrf_pycommon
+
+import pytest
 
 
 def test_launch_service_constructors():
@@ -102,3 +105,56 @@ def test_launch_service_emit_event():
     # Check that the shutdown events was handled.
     assert handled_events.qsize() == 1
     handled_events.get(block=False)
+
+
+def test_queued_events_yield_in_order():
+    """Dispatch queued events in order while allowing ready callbacks to run."""
+    from launch.actions import OpaqueFunction
+    from launch.actions import RegisterEventHandler
+    from launch.event import Event
+    from launch.event_handler import EventHandler
+
+    class QueuedEvent(Event):
+        pass
+
+    events = [QueuedEvent() for _ in range(100)]
+    handled = []
+    callbacks = []
+
+    def on_event(context):
+        assert callbacks == handled
+        event = context.locals.event
+        handled.append(event)
+        context.asyncio_loop.call_soon(callbacks.append, event)
+
+    service = LaunchService()
+    service.include_launch_description(LaunchDescription([
+        RegisterEventHandler(EventHandler(
+            matcher=lambda event: isinstance(event, QueuedEvent),
+            entities=OpaqueFunction(function=on_event))),
+    ]))
+    for event in events:
+        service.emit_event(event)
+    assert service.run() == 0
+    assert handled == events
+    assert callbacks == events
+
+
+@pytest.mark.parametrize('asynchronous', [False, True])
+def test_dispatch_exception_shuts_down(asynchronous):
+    """Report both direct event errors and errors from pending action tasks."""
+    from launch.actions import OpaqueCoroutine
+    from launch.actions import OpaqueFunction
+
+    def fail(context):
+        raise RuntimeError('dispatch failed')
+
+    async def fail_later(context):
+        await asyncio.sleep(0.01)
+        fail(context)
+
+    action = (OpaqueCoroutine(coroutine=fail_later) if asynchronous else
+              OpaqueFunction(function=fail))
+    service = LaunchService()
+    service.include_launch_description(LaunchDescription([action]))
+    assert service.run() == 1

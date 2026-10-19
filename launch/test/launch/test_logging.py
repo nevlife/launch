@@ -51,6 +51,50 @@ def test_bad_logging_launch_config(mock_clean_env):
         launch.logging.launch_config.set_log_format(log_format='default', log_style='%')
 
 
+def test_process_output_screen_batch(capsys, mock_clean_env):
+    """Batch complete lines without changing screen text."""
+    launch.logging.reset()
+    logger, _ = launch.logging.get_output_loggers('batch', 'screen')
+    with mock.patch.object(logger, 'info', wraps=logger.info) as info:
+        launch.logging._log_process_output(logger, ['[batch] one', '[batch] two', ''])
+    assert capsys.readouterr().out == '[batch] one\n[batch] two\n\n'
+    info.assert_called_once_with('[batch] one\n[batch] two\n')
+
+
+@pytest.mark.parametrize('customization', ['filter', 'handler', 'formatter', 'factory', 'log'])
+def test_process_output_records(capsys, log_dir, mock_clean_env, customization):
+    """Keep per-line records for logging customizations and files."""
+    launch.logging.reset()
+    launch.logging.launch_config.log_dir = log_dir
+    output = 'both' if customization == 'log' else 'screen'
+    logger, _ = launch.logging.get_output_loggers('records', output)
+    screen = launch.logging.launch_config.get_screen_handler()
+    if customization == 'filter':
+        logger.addFilter(lambda record: record.msg != 'two')
+    elif customization == 'handler':
+        logger.addHandler(logging.NullHandler())
+    elif customization == 'formatter':
+        screen.setFormatterFor(logger, logging.Formatter('custom: {msg}', style='{'))
+    factory = logging.getLogRecordFactory()
+    if customization == 'factory':
+        logging.setLogRecordFactory(lambda *args, **kwargs: factory(*args, **kwargs))
+    try:
+        with mock.patch.object(logger, 'info', wraps=logger.info) as info:
+            launch.logging._log_process_output(logger, ['one', 'two'])
+        assert info.call_args_list == [mock.call('one'), mock.call('two')]
+        expected = 'one\n' if customization == 'filter' else 'one\ntwo\n'
+        if customization == 'formatter':
+            expected = 'custom: one\ncustom: two\n'
+        assert capsys.readouterr().out == expected
+        if customization == 'log':
+            lines = pathlib.Path(log_dir, 'launch.log').read_text().splitlines()
+            assert len(lines) == 2
+            assert lines[0].endswith(' one') and lines[1].endswith(' two')
+    finally:
+        logging.setLogRecordFactory(factory)
+        logger.filters.clear()
+
+
 def test_output_loggers_bad_configuration(log_dir):
     """Tests that output loggers setup throws at bad configuration."""
     launch.logging.launch_config.reset()

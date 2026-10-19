@@ -17,18 +17,40 @@
 
 """Tests for the ExecuteLocal Action."""
 
+import io
 import os
 import sys
 
 from launch import LaunchDescription
 from launch import LaunchService
 from launch.actions import ExecuteLocal
+from launch.actions import ExecuteProcess
 from launch.actions import OpaqueFunction
 from launch.actions import Shutdown
 from launch.actions import TimerAction
 from launch.descriptions import Executable
+from launch.events.process import ProcessStdout
+import launch.logging
 
 import pytest
+
+
+@pytest.mark.parametrize('cached', [False, True])
+def test_output_line_boundaries(cached, capsys):
+    """Keep prefixes, empty lines and incomplete lines across pipe reads."""
+    launch.logging.reset()
+    action = ExecuteProcess(cmd=['unused'], output_format='prefix: {line}')
+    logger, _ = launch.logging.get_output_loggers('boundaries', 'screen')
+    buffer = io.StringIO()
+    write = (action._ExecuteLocal__on_process_output_cached if cached else
+             action._ExecuteLocal__on_process_output)
+    for text in [b'one\npar', b'tial\n\nlast']:
+        event = ProcessStdout(
+            text=text, action=action, name='boundaries', cmd=['unused'],
+            cwd=None, env=None, pid=1)
+        write(event, buffer, logger)
+    assert capsys.readouterr().out == 'prefix: one\nprefix: partial\nprefix: \n'
+    assert buffer.getvalue() == ('one\npartial\n\nlast' if cached else 'last')
 
 
 @pytest.mark.parametrize('test_input,expected', [

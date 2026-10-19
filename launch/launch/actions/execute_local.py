@@ -375,14 +375,16 @@ class ExecuteLocal(Action):
             buffer.write(to_write)
             buffer.seek(0)
             last_line = None
+            lines = []
             for line in buffer:
                 if line.endswith(os.linesep):
-                    logger.info(
+                    lines.append(
                         self.__output_format.format(line=line[:-len(os.linesep)], this=self)
                     )
                 else:
                     last_line = line
                     break
+            launch.logging._log_process_output(logger, lines)
             buffer.seek(0)
             buffer.truncate(0)
             if last_line is not None:
@@ -421,13 +423,15 @@ class ExecuteLocal(Action):
         buffer.write(to_write)
         buffer.seek(last_cursor)
         new_cursor = last_cursor
+        lines = []
         for line in buffer:
             if not line.endswith(os.linesep):
                 break
             new_cursor = buffer.tell()
-            logger.info(
+            lines.append(
                 self.__output_format.format(line=line[:-len(os.linesep)], this=self)
             )
+        launch.logging._log_process_output(logger, lines)
         buffer.seek(new_cursor)
 
     def __flush_cached_buffers(self, event, context):
@@ -672,10 +676,12 @@ class ExecuteLocal(Action):
             EventHandler(
                 matcher=lambda event: is_a_subclass(event, ShutdownProcess),
                 entities=OpaqueFunction(function=self.__on_shutdown_process_event),
+                event_types=(ShutdownProcess,),
             ),
             EventHandler(
                 matcher=lambda event: is_a_subclass(event, SignalProcess),
                 entities=OpaqueFunction(function=self.__on_signal_process_event),
+                event_types=(SignalProcess,),
             ),
             OnProcessIO(
                 target_action=self,

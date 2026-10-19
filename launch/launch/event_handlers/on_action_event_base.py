@@ -82,7 +82,13 @@ class OnActionEventBase(BaseEventHandler):
                 return event.action is action_matcher
             assert action_matcher is None
             return True
-        super().__init__(matcher=event_matcher, **kwargs)
+        targets_one_action = (
+            not callable(action_matcher) and isinstance(action_matcher, target_action_cls))
+        super().__init__(
+            matcher=event_matcher,
+            event_types=(target_event_cls,),
+            event_action=action_matcher if targets_one_action else None,
+            **kwargs)
         self.__actions_on_event: List[LaunchDescriptionEntity] = []
         # TODO(wjwwood) check that it is not only callable, but also a callable that matches
         # the correct signature for a handler in this case

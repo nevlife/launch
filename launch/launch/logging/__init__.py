@@ -528,6 +528,30 @@ class LaunchLogger(_Base):
         self.propagate = False
 
 
+def _log_process_output(logger: logging.Logger, lines: List[str]) -> None:
+    if not lines or not logger.isEnabledFor(logging.INFO):
+        return
+    screen_handler = launch_config.screen_handler
+    is_screen_handler = type(screen_handler) is getattr(handlers, 'StreamHandler')
+    formatter = (
+        screen_handler._formatters.get(logger.name)
+        if is_screen_handler else None)
+    # Only batch plain screen output; other handlers and filters need a record per line.
+    if (
+        type(logger) is LaunchLogger and not logger.filters and not logger.propagate and
+        logger.handlers == [screen_handler] and
+        is_screen_handler and
+        not screen_handler.filters and screen_handler.terminator == '\n' and
+        type(formatter) is logging.Formatter and formatter._fmt == '{msg}' and
+        type(formatter._style) is logging.StrFormatStyle and
+        logging.getLogRecordFactory() is logging.LogRecord
+    ):
+        logger.info('\n'.join(lines))
+    else:
+        for line in lines:
+            logger.info(line)
+
+
 def reset():
     """Reset logging."""
     # Reset existing logging infrastructure

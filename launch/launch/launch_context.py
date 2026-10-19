@@ -25,6 +25,7 @@ from typing import Mapping
 from typing import MutableMapping
 from typing import Optional
 from typing import Text
+from typing import Tuple
 
 import launch.logging
 
@@ -54,6 +55,12 @@ class LaunchContext:
 
         self._event_queue: asyncio.Queue = asyncio.Queue()
         self._event_handlers: collections.deque = collections.deque()
+        # Index of _event_handlers by the hints handlers give (see BaseEventHandler), so that an
+        # event only visits handlers that can match it instead of every registered one. Each
+        # entry carries its position in _event_handlers to keep the dispatch order.
+        self.__handler_positions = (0, 0)
+        self.__unhinted: List[Tuple[int, BaseEventHandler]] = []
+        self.__by_type: Dict[type, Dict[int, List[Tuple[int, BaseEventHandler]]]] = {}
         self._completion_futures: List[asyncio.Future] = []
 
         self.__globals: Dict[Text, Any] = {}
@@ -208,7 +215,33 @@ class LaunchContext:
 
     def would_handle_event(self, event: Event) -> bool:
         """Check whether an event would be handled or not."""
-        return any(handler.matches(event) for handler in self._event_handlers)
+        return any(handler.matches(event) for handler in self._event_handlers_for(event))
+
+    def _event_handlers_for(self, event: Event) -> List[BaseEventHandler]:
+        """Return the registered handlers that may match the event, in dispatch order."""
+        entries = list(self.__unhinted)
+        action_key = id(getattr(event, 'action', None))
+        for event_type, buckets in self.__by_type.items():
+            if isinstance(event, event_type):
+                entries.extend(buckets.get(0, ()))
+                entries.extend(buckets.get(action_key, ()))
+        entries.sort(key=lambda entry: entry[0])
+        # A handler hinted with several types the event is an instance of appears once per type.
+        return [
+            handler for i, (position, handler) in enumerate(entries)
+            if i == 0 or entries[i - 1][0] != position
+        ]
+
+    def __bucket_lists(self, event_handler: BaseEventHandler):
+        event_types = getattr(event_handler, 'event_types', None)
+        if not event_types:
+            return [self.__unhinted]
+        event_action = getattr(event_handler, 'event_action', None)
+        action_key = 0 if event_action is None else id(event_action)
+        return [
+            self.__by_type.setdefault(event_type, {}).setdefault(action_key, [])
+            for event_type in event_types
+        ]
 
     def register_event_handler(self, event_handler: BaseEventHandler, append=False) -> None:
         """
@@ -217,14 +250,28 @@ class LaunchContext:
         :param append: if 'true', the new event handler will be executed after the previously
             registered ones. If not, it will prepend the old handlers.
         """
+        first, last = self.__handler_positions
         if append:
             self._event_handlers.append(event_handler)
+            last += 1
+            position = last
         else:
             self._event_handlers.appendleft(event_handler)
+            first -= 1
+            position = first
+        self.__handler_positions = (first, last)
+        for bucket in self.__bucket_lists(event_handler):
+            bucket.append((position, event_handler))
 
     def unregister_event_handler(self, event_handler: BaseEventHandler) -> None:
         """Unregister an event handler."""
         self._event_handlers.remove(event_handler)
+        # deque.remove drops the leftmost occurrence, which is the lowest position.
+        for bucket in self.__bucket_lists(event_handler):
+            index = min(
+                (i for i, (_, handler) in enumerate(bucket) if handler is event_handler),
+                key=lambda i: bucket[i][0])
+            del bucket[index]
 
     def emit_event_sync(self, event: Event) -> None:
         """Emit an event synchronously."""

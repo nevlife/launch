@@ -231,14 +231,14 @@ class LaunchService:
 
     async def __process_event(self, event: Event) -> None:
         self.__logger.debug("processing event: '{}'".format(event))
-        for event_handler in tuple(self.__context._event_handlers):
+        for event_handler in self.__context._event_handlers_for(event):
             if event_handler.matches(event):
                 self.__logger.debug(
                     "processing event: '{}' ✓ '{}'".format(event, event_handler))
                 self.__context._push_locals()
-                entities = event_handler.handle(event, self.__context)
+                handled = event_handler.handle(event, self.__context)
                 entities = \
-                    entities if isinstance(entities, collections.abc.Iterable) else (entities,)
+                    handled if isinstance(handled, collections.abc.Iterable) else (handled,)
                 for entity in [e for e in entities if e is not None]:
                     from .utilities import is_a_subclass
                     if not is_a_subclass(entity, LaunchDescriptionEntity):
@@ -306,6 +306,11 @@ class LaunchService:
                             process_one_event_task.cancel()
                         break
 
+                    if process_one_event_task is None and not self.__context._event_queue.empty():
+                        await self._process_one_event()
+                        await asyncio.sleep(0)
+                        continue
+
                     # Collect futures to wait on
                     # We only need to wait on futures if there are no events to wait on
                     entity_futures = []
@@ -338,6 +343,9 @@ class LaunchService:
                             exception_to_raise = exc
                         else:
                             self.__logger.error(exc)
+
+                    if process_one_event_task in completed_tasks:
+                        process_one_event_task = None
 
                     if exception_to_raise is not None:
                         raise exception_to_raise
