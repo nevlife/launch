@@ -65,18 +65,39 @@ class Parser:
 
     extensions_loaded = False
     frontend_parsers = None
+    _pending_launch_extensions = None
 
     @classmethod
     def load_launch_extensions(cls):
         """Load launch extensions, in order to get all the exposed substitutions and actions."""
-        if cls.extensions_loaded is False:
-            for entry_point in select_entry_points('launch.frontend.launch_extension'):
-                try:
-                    entry_point.load()
-                except Exception:
-                    warnings.warn(f'Failed to load the launch extension: {entry_point.name}\n'
-                                  f'{traceback.format_exc()}')
+        while cls.load_next_launch_extension():
+            pass
+
+    @classmethod
+    def load_next_launch_extension(cls) -> bool:
+        """
+        Load one more launch extension.
+
+        Extensions are imported on demand, when a name is not exposed yet, because importing
+        every installed extension can cost more than parsing the launch file.
+
+        :return: False if every extension was loaded already.
+        """
+        if cls.extensions_loaded:
+            return False
+        if cls._pending_launch_extensions is None:
+            cls._pending_launch_extensions = list(
+                select_entry_points('launch.frontend.launch_extension'))
+        if not cls._pending_launch_extensions:
             cls.extensions_loaded = True
+            return False
+        entry_point = cls._pending_launch_extensions.pop(0)
+        try:
+            entry_point.load()
+        except Exception:
+            warnings.warn(f'Failed to load the launch extension: {entry_point.name}\n'
+                          f'{traceback.format_exc()}')
+        return True
 
     @classmethod
     def load_parser_implementations(cls):
@@ -93,7 +114,6 @@ class Parser:
 
     def parse_action(self, entity: Entity) -> Action:
         """Parse an action, using its registered parsing method."""
-        self.load_launch_extensions()
         return instantiate_action(entity, self)
 
     def parse_substitution(self, value: Text) -> List[Substitution]:

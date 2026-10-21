@@ -34,8 +34,16 @@ action_parse_methods: Dict[str, Any] = {}
 substitution_parse_methods: Dict[str, Any] = {}
 
 
+def _load_extensions_until_exposed(name: Text, parse_methods_map: dict) -> None:
+    from .parser import Parser  # noqa: F811
+    while name not in parse_methods_map and Parser.load_next_launch_extension():
+        pass
+
+
 def instantiate_action(entity: 'Entity', parser: 'Parser') -> Action:
     """Call the registered parsing method for the `Entity`."""
+    if entity.type_name not in action_parse_methods:
+        _load_extensions_until_exposed(entity.type_name, action_parse_methods)
     if entity.type_name not in action_parse_methods:
         raise RuntimeError('Unrecognized entity of the type: {}'.format(entity.type_name))
     action_type, kwargs = action_parse_methods[entity.type_name](entity, parser)
@@ -47,6 +55,8 @@ def instantiate_substitution(
     args: Optional[Iterable[SomeSubstitutionsType]] = None
 ) -> Substitution:
     """Call the registered substitution parsing method, according to `args`."""
+    if type_name not in substitution_parse_methods:
+        _load_extensions_until_exposed(type_name, substitution_parse_methods)
     if type_name not in substitution_parse_methods:
         raise RuntimeError(
             'Unknown substitution: {}'.format(type_name))

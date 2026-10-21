@@ -14,12 +14,18 @@
 
 """Test the abstract Parser class."""
 
+import os
 from unittest.mock import patch
 import warnings
 
+from launch import LaunchContext
+import launch.frontend.expose
+from launch.frontend.parse_substitution import parse_substitution
 import launch.frontend.parser
 from launch.frontend.parser import Parser
+from launch.substitutions import TextSubstitution
 from launch.utilities import entry_points_impl
+from launch.utilities import perform_substitutions
 from launch.utilities.entry_points_impl import importlib_metadata
 
 import pytest
@@ -45,6 +51,7 @@ def test_invalid_launch_extension(monkeypatch):
     skip_if_warned_already('Failed to load the launch')
     monkeypatch.setattr(entry_points_impl, '_entry_points', None)
     monkeypatch.setattr(Parser, 'extensions_loaded', False)
+    monkeypatch.setattr(Parser, '_pending_launch_extensions', None)
     with patch(importlib_metadata.__name__ + '.entry_points') as mock_ep:
         mock_ep.return_value = {
             'launch.frontend.launch_extension': [InvalidEntryPoint()]
@@ -73,6 +80,7 @@ def test_invalid_parser_implementations(monkeypatch):
 def test_entry_points_scanned_once(monkeypatch):
     monkeypatch.setattr(entry_points_impl, '_entry_points', None)
     monkeypatch.setattr(Parser, 'extensions_loaded', False)
+    monkeypatch.setattr(Parser, '_pending_launch_extensions', None)
     monkeypatch.setattr(Parser, 'frontend_parsers', None)
     with patch(importlib_metadata.__name__ + '.entry_points') as mock_ep:
         mock_ep.return_value = {}
@@ -80,3 +88,40 @@ def test_entry_points_scanned_once(monkeypatch):
         Parser.load_parser_implementations()
         assert entry_points_impl.select_entry_points('launch_ros.node_action') == []
     assert mock_ep.call_count == 1
+
+
+class ExposingEntryPoint:
+
+    def __init__(self, name, loaded):
+        self.name = name
+        self.loaded = loaded
+
+    def load(self):
+        self.loaded.append(self.name)
+        launch.frontend.expose.substitution_parse_methods[self.name] = \
+            lambda args: (TextSubstitution, {'text': self.name})
+
+
+def test_launch_extensions_load_on_demand(monkeypatch):
+    loaded = []
+    entry_points = [ExposingEntryPoint(name, loaded) for name in ('lazy-a', 'lazy-b', 'lazy-c')]
+    monkeypatch.setattr(entry_points_impl, '_entry_points', None)
+    monkeypatch.setattr(Parser, 'extensions_loaded', False)
+    monkeypatch.setattr(Parser, '_pending_launch_extensions', None)
+    try:
+        with patch(importlib_metadata.__name__ + '.entry_points') as mock_ep:
+            mock_ep.return_value = {'launch.frontend.launch_extension': entry_points}
+            assert perform_substitutions(LaunchContext(), parse_substitution('a$(env HOME)')) \
+                == 'a' + os.environ['HOME']
+            assert loaded == []
+            assert perform_substitutions(
+                LaunchContext(), parse_substitution('$(lazy-b)')) == 'lazy-b'
+            assert loaded == ['lazy-a', 'lazy-b']
+            # The Earley fallback wraps the error in lark's VisitError, as it always did.
+            with pytest.raises(Exception, match='Unknown substitution: lazy-d'):
+                parse_substitution('$(lazy-d)')
+            assert loaded == ['lazy-a', 'lazy-b', 'lazy-c']
+            assert Parser.extensions_loaded
+    finally:
+        for name in loaded:
+            del launch.frontend.expose.substitution_parse_methods[name]
