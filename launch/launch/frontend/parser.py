@@ -17,7 +17,6 @@
 
 import itertools
 import os.path
-import sys
 import traceback
 from typing import List
 from typing import Optional
@@ -38,14 +37,10 @@ from .parse_substitution import replace_escaped_characters
 from ..action import Action
 from ..invalid_launch_file_error import InvalidLaunchFileError
 from ..substitution import Substitution
+from ..utilities.entry_points_impl import select_entry_points
 from ..utilities.type_utils import NormalizedValueType
 from ..utilities.type_utils import StrSomeValueType
 from ..utilities.typing_file_path import FilePath
-
-if sys.version_info >= (3, 8):
-    import importlib.metadata as importlib_metadata
-else:
-    import importlib_metadata
 
 if TYPE_CHECKING:
     from ..launch_description import LaunchDescription
@@ -75,12 +70,7 @@ class Parser:
     def load_launch_extensions(cls):
         """Load launch extensions, in order to get all the exposed substitutions and actions."""
         if cls.extensions_loaded is False:
-            entry_points = importlib_metadata.entry_points()
-            if hasattr(entry_points, 'select'):
-                groups = entry_points.select(group='launch.frontend.launch_extension')
-            else:
-                groups = entry_points.get('launch.frontend.launch_extension', [])
-            for entry_point in groups:
+            for entry_point in select_entry_points('launch.frontend.launch_extension'):
                 try:
                     entry_point.load()
                 except Exception:
@@ -93,12 +83,7 @@ class Parser:
         """Load all the available frontend entities."""
         if cls.frontend_parsers is None:
             parsers = {}
-            entry_points = importlib_metadata.entry_points()
-            if hasattr(entry_points, 'select'):
-                groups = entry_points.select(group='launch.frontend.parser')
-            else:
-                groups = entry_points.get('launch.frontend.parser', [])
-            for entry_point in groups:
+            for entry_point in select_entry_points('launch.frontend.parser'):
                 try:
                     parsers[entry_point.name] = entry_point.load()
                 except Exception:

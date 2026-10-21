@@ -18,8 +18,9 @@ from unittest.mock import patch
 import warnings
 
 import launch.frontend.parser
-from launch.frontend.parser import importlib_metadata
 from launch.frontend.parser import Parser
+from launch.utilities import entry_points_impl
+from launch.utilities.entry_points_impl import importlib_metadata
 
 import pytest
 
@@ -40,8 +41,10 @@ def skip_if_warned_already(warn_text):
                 pytest.skip('Skip because warnings can only be raised once')
 
 
-def test_invalid_launch_extension():
+def test_invalid_launch_extension(monkeypatch):
     skip_if_warned_already('Failed to load the launch')
+    monkeypatch.setattr(entry_points_impl, '_entry_points', None)
+    monkeypatch.setattr(Parser, 'extensions_loaded', False)
     with patch(importlib_metadata.__name__ + '.entry_points') as mock_ep:
         mock_ep.return_value = {
             'launch.frontend.launch_extension': [InvalidEntryPoint()]
@@ -52,8 +55,10 @@ def test_invalid_launch_extension():
             assert 'Failed to load the launch' in str(caught_warnings[0])
 
 
-def test_invalid_parser_implementations():
+def test_invalid_parser_implementations(monkeypatch):
     skip_if_warned_already('Failed to load the parser')
+    monkeypatch.setattr(entry_points_impl, '_entry_points', None)
+    monkeypatch.setattr(Parser, 'frontend_parsers', None)
     with patch(importlib_metadata.__name__ + '.entry_points') as mock_ep:
         mock_ep.return_value = {
             'launch.frontend.parser': [InvalidEntryPoint()]
@@ -63,3 +68,15 @@ def test_invalid_parser_implementations():
             Parser.load_parser_implementations()
             assert caught_warnings
             assert 'Failed to load the parser' in str(caught_warnings[0])
+
+
+def test_entry_points_scanned_once(monkeypatch):
+    monkeypatch.setattr(entry_points_impl, '_entry_points', None)
+    monkeypatch.setattr(Parser, 'extensions_loaded', False)
+    monkeypatch.setattr(Parser, 'frontend_parsers', None)
+    with patch(importlib_metadata.__name__ + '.entry_points') as mock_ep:
+        mock_ep.return_value = {}
+        Parser.load_launch_extensions()
+        Parser.load_parser_implementations()
+        assert entry_points_impl.select_entry_points('launch_ros.node_action') == []
+    assert mock_ep.call_count == 1
