@@ -20,11 +20,6 @@ from typing import Text
 
 from ament_index_python.packages import get_package_share_directory
 
-from lark import Lark
-from lark import Token
-from lark import Transformer
-from lark import Tree
-
 from .expose import instantiate_substitution
 from ..substitutions import TextSubstitution
 from ..utilities.type_utils import NormalizedValueType
@@ -36,64 +31,70 @@ def replace_escaped_characters(data: Text) -> Text:
     return re.sub(r'\\(.)', r'\1', data)
 
 
-class ExtractSubstitution(Transformer):
-    """Extract a substitution."""
+def _make_extract_substitution():
+    from lark import Token
+    from lark import Transformer
 
-    def part(self, content):
-        assert len(content) == 1
-        content = content[0]
-        if isinstance(content, Token):
-            assert content.type.endswith('_RSTRING')
-            return TextSubstitution(text=replace_escaped_characters(content.value))
-        return content
+    class ExtractSubstitution(Transformer):
+        """Extract a substitution."""
 
-    single_quoted_part = part
-    double_quoted_part = part
+        def part(self, content):
+            assert len(content) == 1
+            content = content[0]
+            if isinstance(content, Token):
+                assert content.type.endswith('_RSTRING')
+                return TextSubstitution(text=replace_escaped_characters(content.value))
+            return content
 
-    def value(self, parts):
-        if len(parts) == 1 and isinstance(parts[0], list):
-            # Deal with single and double quoted templates
-            return parts[0]
-        return parts
+        single_quoted_part = part
+        double_quoted_part = part
 
-    single_quoted_value = value
-    double_quoted_value = value
+        def value(self, parts):
+            if len(parts) == 1 and isinstance(parts[0], list):
+                # Deal with single and double quoted templates
+                return parts[0]
+            return parts
 
-    def arguments(self, values):
-        if len(values) > 1:
-            # Deal with tail recursive argument parsing
-            return [*values[0], values[1]]
-        return values
+        single_quoted_value = value
+        double_quoted_value = value
 
-    single_quoted_arguments = arguments
-    double_quoted_arguments = arguments
+        def arguments(self, values):
+            if len(values) > 1:
+                # Deal with tail recursive argument parsing
+                return [*values[0], values[1]]
+            return values
 
-    def substitution(self, args):
-        assert len(args) >= 1
-        name = args[0]
-        assert isinstance(name, Token)
-        assert name.type == 'IDENTIFIER'
-        return instantiate_substitution(name.value, *args[1:])
+        single_quoted_arguments = arguments
+        double_quoted_arguments = arguments
 
-    single_quoted_substitution = substitution
-    double_quoted_substitution = substitution
+        def substitution(self, args):
+            assert len(args) >= 1
+            name = args[0]
+            assert isinstance(name, Token)
+            assert name.type == 'IDENTIFIER'
+            return instantiate_substitution(name.value, *args[1:])
 
-    def fragment(self, content):
-        assert len(content) == 1
-        content = content[0]
-        if isinstance(content, Token):
-            assert content.type.endswith('_STRING')
-            return TextSubstitution(text=replace_escaped_characters(content.value))
-        return content
+        single_quoted_substitution = substitution
+        double_quoted_substitution = substitution
 
-    single_quoted_fragment = fragment
-    double_quoted_fragment = fragment
+        def fragment(self, content):
+            assert len(content) == 1
+            content = content[0]
+            if isinstance(content, Token):
+                assert content.type.endswith('_STRING')
+                return TextSubstitution(text=replace_escaped_characters(content.value))
+            return content
 
-    def template(self, fragments):
-        return fragments
+        single_quoted_fragment = fragment
+        double_quoted_fragment = fragment
 
-    single_quoted_template = template
-    double_quoted_template = template
+        def template(self, fragments):
+            return fragments
+
+        single_quoted_template = template
+        double_quoted_template = template
+
+    return ExtractSubstitution
 
 
 def get_grammar_path():
@@ -108,8 +109,21 @@ class _ParseError(Exception):
     pass
 
 
+class _Substitution:
+    __slots__ = ('name', 'arguments')
+
+    def __init__(self, name, arguments):
+        self.name = name
+        self.arguments = arguments
+
+
 class _SubstitutionParser:
-    """Build grammar trees to preserve the existing transformer semantics."""
+    """
+    Parse the grammar of grammar.lark without lark.
+
+    Text is kept raw and substitutions are instantiated only after the whole string parsed,
+    so errors match the Earley parser followed by ExtractSubstitution.
+    """
 
     _identifier = re.compile(r'[a-zA-Z][a-zA-Z0-9_-]*')
     _strings = {
@@ -125,44 +139,39 @@ class _SubstitutionParser:
         '"': re.compile(
             r'(?:\\"|[^ "\\$()]|(?<=\\)[()]|\$(?!\()|(?<=\\)\$|\\)+'),
     }
-    _prefixes = {'': '', "'": 'single_quoted_', '"': 'double_quoted_'}
 
     def __init__(self, text):
         self.text = text
         self.position = 0
 
     def parse(self):
-        tree = self._template('')
+        items = self._template('')
         if self.position != len(self.text):
             raise _ParseError()
-        return tree
+        return items
 
-    def _terminal(self, patterns, quote, rule):
+    def _terminal(self, patterns, quote):
         match = patterns[quote].match(self.text, self.position)
         if match is None:
             return None
         self.position = match.end()
-        prefix = self._prefixes[quote]
-        token = Token((prefix or 'unquoted_').upper() + rule, match.group())
-        return token
+        return match.group()
 
     def _template(self, quote):
-        prefix = self._prefixes[quote]
-        fragments = []
+        items = []
         while self.position < len(self.text):
-            token = self._terminal(self._strings, quote, 'STRING')
-            if token is not None:
-                fragment = token
+            text = self._terminal(self._strings, quote)
+            if text is not None:
+                items.append(text)
             elif self.text.startswith('$(', self.position):
-                fragment = self._substitution(quote)
+                items.append(self._substitution(quote))
             else:
                 break
-            fragments.append(Tree(prefix + 'fragment', [fragment]))
         if quote:
             self._expect(quote)
-        elif not fragments:
+        elif not items:
             raise _ParseError()
-        return Tree(prefix + 'template', fragments)
+        return items
 
     def _expect(self, character):
         if not self.text.startswith(character, self.position):
@@ -170,43 +179,62 @@ class _SubstitutionParser:
         self.position += len(character)
 
     def _substitution(self, quote):
-        prefix = self._prefixes[quote]
         self._expect('$(')
         name = self._identifier.match(self.text, self.position)
         if name is None:
             raise _ParseError()
         self.position = name.end()
-        children = [Token('IDENTIFIER', name.group())]
         arguments = None
         while self.text.startswith(' ', self.position):
             self.position += 1
-            value = self._value(quote)
-            arguments = Tree(
-                prefix + 'arguments', [value] if arguments is None else [arguments, value])
-        if arguments is not None:
-            children.append(arguments)
+            if arguments is None:
+                arguments = []
+            arguments.append(self._value(quote))
         self._expect(')')
-        return Tree(prefix + 'substitution', children)
+        return _Substitution(name.group(), arguments)
 
     def _value(self, quote):
-        prefix = self._prefixes[quote]
         if not quote and self.text[self.position:self.position + 1] in ('"', "'"):
             nested_quote = self.text[self.position]
             self.position += 1
-            return Tree('value', [self._template(nested_quote)])
-        parts = []
+            return self._template(nested_quote)
+        items = []
         while self.position < len(self.text):
-            token = self._terminal(self._rstrings, quote, 'RSTRING')
-            if token is not None:
-                part = token
+            text = self._terminal(self._rstrings, quote)
+            if text is not None:
+                items.append(text)
             elif self.text.startswith('$(', self.position):
-                part = self._substitution(quote)
+                items.append(self._substitution(quote))
             else:
                 break
-            parts.append(Tree(prefix + 'part', [part]))
-        if not parts:
+        if not items:
             raise _ParseError()
-        return Tree(prefix + 'value', parts)
+        return items
+
+
+def _instantiate(items):
+    result = []
+    for item in items:
+        if isinstance(item, str):
+            result.append(TextSubstitution(text=replace_escaped_characters(item)))
+        elif item.arguments is None:
+            result.append(instantiate_substitution(item.name))
+        else:
+            result.append(instantiate_substitution(
+                item.name, [_instantiate(value) for value in item.arguments]))
+    return result
+
+
+_extract_substitution = None
+
+
+def __getattr__(name):
+    global _extract_substitution
+    if name == 'ExtractSubstitution':
+        if _extract_substitution is None:
+            _extract_substitution = _make_extract_substitution()
+        return _extract_substitution
+    raise AttributeError(f'module {__name__!r} has no attribute {name!r}')
 
 
 def parse_substitution(string_value):
@@ -217,14 +245,16 @@ def parse_substitution(string_value):
     if '$(' not in string_value:
         return [TextSubstitution(text=replace_escaped_characters(string_value))]
     try:
-        tree = _SubstitutionParser(string_value).parse()
-    except _ParseError:
-        if _parser is None:
-            with open(get_grammar_path(), 'r') as h:
-                _parser = Lark(h, start='template')
-        tree = _parser.parse(string_value)
-    transformer = ExtractSubstitution()
-    return transformer.transform(tree)
+        return _instantiate(_SubstitutionParser(string_value).parse())
+    except Exception:
+        # Earley and its transformer raise the errors callers have always seen
+        # (lark syntax errors, VisitError around a failed substitution).
+        pass
+    if _parser is None:
+        from lark import Lark
+        with open(get_grammar_path(), 'r') as h:
+            _parser = Lark(h, start='template')
+    return __getattr__('ExtractSubstitution')().transform(_parser.parse(string_value))
 
 
 def parse_if_substitutions(

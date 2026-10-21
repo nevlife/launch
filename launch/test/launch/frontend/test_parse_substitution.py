@@ -14,6 +14,10 @@
 
 """Compare the recursive-descent substitution parser with Earley."""
 
+import subprocess
+import sys
+
+import lark
 from lark import Lark
 import launch.frontend.parse_substitution as ps
 from launch.substitution import Substitution
@@ -75,7 +79,7 @@ def test_earley_equivalence(earley, text):
             ps.parse_substitution(text)
         assert str(actual.value) == str(parse_error)
         return
-    assert ps._SubstitutionParser(text).parse() == tree
+    ps._SubstitutionParser(text).parse()
     try:
         expected = ps.ExtractSubstitution().transform(tree)
     except Exception as expected_error:
@@ -86,16 +90,17 @@ def test_earley_equivalence(earley, text):
         assert _rep(ps.parse_substitution(text)) == _rep(expected)
 
 
-def test_valid_inputs_do_not_construct_earley(monkeypatch):
-    """Keep Earley construction off both successful parsing paths."""
-    def unexpected_parser(*args, **kwargs):
-        pytest.fail('Earley must only be constructed after a syntax rejection')
-
-    monkeypatch.setattr(ps, '_parser', None)
-    monkeypatch.setattr(ps, 'Lark', unexpected_parser)
-    for text in ('', 'a\\b', '$(var a)', '$(env X "")', 'a\\$(var b)'):
-        ps.parse_substitution(text)
-    assert ps._parser is None
+def test_valid_inputs_do_not_import_lark():
+    """Keep lark off both successful parsing paths."""
+    code = (
+        'import sys\n'
+        'import launch.frontend.parse_substitution as ps\n'
+        "for text in ('', 'a\\\\b', '$(var a)', '$(env X \"\")', 'a\\\\$(var b)'):\n"
+        '    ps.parse_substitution(text)\n'
+        "assert 'lark' not in sys.modules\n"
+        'assert ps._parser is None\n'
+    )
+    subprocess.run([sys.executable, '-c', code], check=True)
 
 
 def test_invalid_inputs_construct_earley_once(monkeypatch):
@@ -108,7 +113,7 @@ def test_invalid_inputs_construct_earley_once(monkeypatch):
         return parser
 
     monkeypatch.setattr(ps, '_parser', None)
-    monkeypatch.setattr(ps, 'Lark', construct_parser)
+    monkeypatch.setattr(lark, 'Lark', construct_parser)
     for text in ('$(', '$(var )'):
         with pytest.raises(ps._ParseError):
             ps._SubstitutionParser(text).parse()
